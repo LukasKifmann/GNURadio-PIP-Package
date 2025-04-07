@@ -1,7 +1,13 @@
 cmake_minimum_required(VERSION 3.18)
-project(gnuradio-local)
+project(gnuradio-pip-package)
 
 include(ExternalProject)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SNDFILE REQUIRED sndfile)
+
+include_directories(${SNDFILE_INCLUDE_DIRS})
+link_directories(${SNDFILE_LIBRARY_DIRS})
 
 execute_process(COMMAND python3 -c "import sys; print(sys.executable)"
                 OUTPUT_VARIABLE PYTHON_EXECUTABLE OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -26,4 +32,8 @@ ExternalProject_Add(
     -DPYTHON_SITE_PACKAGES=${SP_DIR}
     -DGR_PYTHON_DIR=${SP_DIR}
     -DENABLE_PYTHON=ON
+    -DENABLE_GR_AUDIO=ON
+    -DENABLE_GR_BLOCKS=ON
+    -DAUDIO_BACKEND=alsa
+    -DHAVE_LIBSNDFILE=TRUE
 )
