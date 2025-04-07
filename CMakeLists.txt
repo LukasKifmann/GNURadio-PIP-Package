@@ -8,11 +8,7 @@ execute_process(COMMAND python3 -c "import sys; print(sys.executable)"
 
 execute_process(COMMAND python3 -c "import site; print(site.getsitepackages()[0])"
                 OUTPUT_VARIABLE SP_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-
-execute_process(COMMAND /bin/sh -c "PYTHON_EXECUTABLE=${PYTHON_EXECUTABLE} SP_DIR=${SP_DIR} envsubst < ${CMAKE_SOURCE_DIR}/venv_python.sh.template > ${CMAKE_SOURCE_DIR}/venv_python.sh && chmod +x ${CMAKE_SOURCE_DIR}/venv_python.sh")
-
-set(PYTHON_EXECUTABLE "${CMAKE_SOURCE_DIR}/venv_python.sh")
-
+                
 ExternalProject_Add(
   gnuradio
   GIT_REPOSITORY https://github.com/gnuradio/gnuradio.git
