@@ -1,0 +1,12 @@
+[build-system]
+requires = ["scikit-build-core", "pybind11", "packaging"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "gnuradio"
+version = "3.10.12.0"
+dependencies = ["numpy>=1.17.4,<2.0.0"]
+
+[tool.scikit-build]
+cmake.verbose = true
+cmake.version = ">=3.18"

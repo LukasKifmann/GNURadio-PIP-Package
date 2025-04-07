@@ -1,0 +1,4 @@
+#!/bin/sh
+
+export PYTHONPATH=${SP_DIR}
+exec ${PYTHON_EXECUTABLE} "$@"
