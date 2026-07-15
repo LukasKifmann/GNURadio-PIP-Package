@@ -1,12 +1,21 @@
 [build-system]
-requires = ["scikit-build-core", "numpy>=1.17.4", "pybind11", "packaging"]
-build-backend = "scikit_build_core.build"
+requires = [
+    "numpy>=1.17.4",
+    "setuptools>=61.0.0",
+    "wheel",
+    "cmake>=3.22",
+    "ninja",
+    "mako>=1.2.0",
+    "pybind11>=2.10.0",
+    "pybind11-stubgen",
+    "boost-headers>=1.82.0",
+]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "gnuradio"
 version = "3.10.12.0"
 dependencies = ["numpy>=1.17.4"]
 
-[tool.scikit-build]
-cmake.verbose = true
-cmake.version = ">=3.18"
+[tool.setuptools]
+packages = ["gnuradio", "pmt"]

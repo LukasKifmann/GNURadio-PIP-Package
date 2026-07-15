@@ -1,40 +1,366 @@
-cmake_minimum_required(VERSION 3.18)
+cmake_minimum_required(VERSION 3.24)
 project(gnuradio-pip-package)
 
 include(ExternalProject)
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SNDFILE REQUIRED sndfile)
+# ==============================================================================
+# PYTHON DETECTION & RECOVERY
+# ==============================================================================
+# Prioritize Python path bindings passed down from setup.py
+if(DEFINED PYTHON_EXECUTABLE)
+    set(Python_EXECUTABLE "${PYTHON_EXECUTABLE}")
+elseif(DEFINED Python3_EXECUTABLE)
+    set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
+elseif(NOT DEFINED Python_EXECUTABLE)
+    find_package(Python REQUIRED COMPONENTS Interpreter Development.Module)
+endif()
 
-include_directories(${SNDFILE_INCLUDE_DIRS})
-link_directories(${SNDFILE_LIBRARY_DIRS})
+# Resolve true base Python include directory (where Python.h actually lives)
+if(DEFINED Python3_INCLUDE_DIR)
+    set(PYTHON_REAL_INCLUDE_DIR "${Python3_INCLUDE_DIR}")
+elseif(DEFINED PYTHON_INCLUDE_DIR)
+    set(PYTHON_REAL_INCLUDE_DIR "${PYTHON_INCLUDE_DIR}")
+else()
+    execute_process(
+        COMMAND ${Python_EXECUTABLE} -c "import sysconfig; print(sysconfig.get_path('include'), end='')"
+        OUTPUT_VARIABLE PYTHON_REAL_INCLUDE_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+endif()
+file(TO_CMAKE_PATH "${PYTHON_REAL_INCLUDE_DIR}" PYTHON_REAL_INCLUDE_DIR)
 
-execute_process(COMMAND python3 -c "import sys; print(sys.executable)"
-                OUTPUT_VARIABLE PYTHON_EXECUTABLE OUTPUT_STRIP_TRAILING_WHITESPACE)
+# Resolve true base Python link library (.lib) for Windows linking
+if(DEFINED Python3_LIBRARY)
+    set(PYTHON_REAL_LIBRARY "${Python3_LIBRARY}")
+elseif(DEFINED PYTHON_LIBRARY)
+    set(PYTHON_REAL_LIBRARY "${PYTHON_LIBRARY}")
+else()
+    if(WIN32)
+        execute_process(
+            COMMAND ${Python_EXECUTABLE} -c "import sys; print(sys.prefix)"
+            OUTPUT_VARIABLE PYTHON_SYS_PREFIX_RAW
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        file(TO_CMAKE_PATH "${PYTHON_SYS_PREFIX_RAW}" CLEAN_SYS_PREFIX)
+        execute_process(
+            COMMAND ${Python_EXECUTABLE} -c "import sys; print(f'{sys.version_info.major}{sys.version_info.minor}', end='')"
+            OUTPUT_VARIABLE PY_VER_SHORT
+        )
+        set(PYTHON_REAL_LIBRARY "${CLEAN_SYS_PREFIX}/libs/python${PY_VER_SHORT}.lib")
+    else()
+        set(PYTHON_REAL_LIBRARY "")
+    endif()
+endif()
+if(PYTHON_REAL_LIBRARY)
+    file(TO_CMAKE_PATH "${PYTHON_REAL_LIBRARY}" PYTHON_REAL_LIBRARY)
+endif()
 
-execute_process(COMMAND python3 -c "import site; print(site.getsitepackages()[0])"
-                OUTPUT_VARIABLE SP_DIR OUTPUT_STRIP_TRAILING_WHITESPACE)
-                
+# Set up staging destination prefixes
+if(WIN32)
+    set(SP_DIR "Lib/site-packages")
+    set(AUDIO_BACKEND "windows")
+else()
+    set(SP_DIR "lib/python${Python_VERSION_MAJOR}.${Python_VERSION_MINOR}/site-packages")
+    set(AUDIO_BACKEND "alsa")
+endif()
+
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT OR NOT CMAKE_INSTALL_PREFIX)
+    set(WHEEL_PREFIX "${CMAKE_BINARY_DIR}/wheel_staging")
+else()
+    set(WHEEL_PREFIX "${CMAKE_INSTALL_PREFIX}")
+endif()
+
+file(TO_CMAKE_PATH "${WHEEL_PREFIX}" CLEAN_WHEEL_PREFIX)
+file(MAKE_DIRECTORY "${CLEAN_WHEEL_PREFIX}/include")
+file(MAKE_DIRECTORY "${CLEAN_WHEEL_PREFIX}/lib")
+
+# Retrieve remaining environment dependencies relative to interpreter
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import pybind11; print(pybind11.get_cmake_dir())"
+    OUTPUT_VARIABLE PYBIND11_COMPUTED_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+file(TO_CMAKE_PATH "${PYBIND11_COMPUTED_DIR}" CLEAN_PYBIND11_DIR)
+
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import numpy; print(numpy.get_include())"
+    OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+file(TO_CMAKE_PATH "${NUMPY_INCLUDE_DIR}" CLEAN_NUMPY_INCLUDE_DIR)
+
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import site; print(site.getsitepackages()[0])"
+    OUTPUT_VARIABLE PYTHON_SITE_PACKAGES
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+file(TO_CMAKE_PATH "${PYTHON_SITE_PACKAGES}" CLEAN_SITE_PACKAGES)
+
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import sys; print(sys.prefix)"
+    OUTPUT_VARIABLE PYTHON_SYS_PREFIX
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+file(TO_CMAKE_PATH "${PYTHON_SYS_PREFIX}" CLEAN_SYS_PREFIX)
+
+message(STATUS "Normalized Slotted Prefixes: ${CLEAN_SYS_PREFIX} ; ${CLEAN_SITE_PACKAGES} ; ${CLEAN_WHEEL_PREFIX}")
+message(STATUS "Using Base Python Include: ${PYTHON_REAL_INCLUDE_DIR}")
+message(STATUS "Using Base Python Library: ${PYTHON_REAL_LIBRARY}")
+
+if(WIN32)
+    set(ENV{INCLUDE} "$ENV{INCLUDE};${CLEAN_WHEEL_PREFIX}/include")
+endif()
+
+# ==============================================================================
+# HACK: Force-generate missing afxres.h header for rc.exe
+# ==============================================================================
+set(HACK_INCLUDE_DIR "${CMAKE_BINARY_DIR}/rc_hacks")
+file(MAKE_DIRECTORY "${HACK_INCLUDE_DIR}")
+file(WRITE "${HACK_INCLUDE_DIR}/afxres.h" "// MFC Fallback\n#include <winres.h>\n")
+
+# ==============================================================================
+# EXTERNAL DEPENDENCIES COMPILATION
+# ==============================================================================
 ExternalProject_Add(
-  gnuradio
-  GIT_REPOSITORY https://github.com/gnuradio/gnuradio.git
-  GIT_TAG v3.10.12.0
-  SOURCE_DIR ${CMAKE_BINARY_DIR}/gnuradio-src
-  BINARY_DIR ${CMAKE_BINARY_DIR}/gnuradio-build
-  INSTALL_DIR ${CMAKE_INSTALL_PREFIX}
-  CMAKE_ARGS
-    -DCMAKE_PREFIX_PATH=<INSTALL_DIR>
-    -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-    -DCMAKE_INSTALL_RPATH=${SP_DIR}/lib
-    -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
-    -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
-    -DPYTHON_SITE_PACKAGES=${SP_DIR}
+    libsndfile_ext
+    GIT_REPOSITORY https://github.com/libsndfile/libsndfile.git
+    GIT_TAG 1.2.2
+    CMAKE_ARGS
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}
+        -DBUILD_PROGRAMS=OFF
+        -DBUILD_EXAMPLES=OFF
+        -DBUILD_TESTING=OFF
+        -DENABLE_EXTERNAL_LIBS=OFF
+)
+
+ExternalProject_Add(
+    volk_ext
+    GIT_REPOSITORY https://github.com/gnuradio/volk.git
+    GIT_TAG v3.1.0
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}
+        -DENABLE_TESTING=OFF
+        -DENABLE_PROFILING=OFF
+)
+
+ExternalProject_Add(
+    spdlog_ext
+    GIT_REPOSITORY https://github.com/gabime/spdlog.git
+    GIT_TAG v1.12.0
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}
+        -DSPDLOG_BUILD_EXAMPLES=OFF
+        -DSPDLOG_BUILD_TESTS=OFF
+)
+
+ExternalProject_Add(
+    fftw3f_ext
+    URL "https://www.fftw.org/fftw-3.3.11.tar.gz"
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        -DENABLE_FLOAT=ON
+        -DENABLE_SSE2=ON
+        -DENABLE_AVX=ON
+        -DBUILD_TESTS=OFF
+)
+
+if(WIN32)
+    ExternalProject_Add(
+        boost_ext
+        URL "https://archives.boost.io/release/1.82.0/binaries/boost_1_82_0-bin-msvc-all-32-64.7z"
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/boost ${CLEAN_WHEEL_PREFIX}/include/boost
+        COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/lib64-msvc-14.3 ${CLEAN_WHEEL_PREFIX}/lib
+        COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/lib64-msvc-14.3/cmake ${CLEAN_WHEEL_PREFIX}/lib/cmake
+    )
+else()
+    ExternalProject_Add(
+        boost_ext
+        URL https://archives.boost.io/release/1.82.0/source/boost_1_82_0.zip
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/boost ${CLEAN_WHEEL_PREFIX}/include/boost
+    )
+endif()
+
+if(WIN32)
+    ExternalProject_Add(gmp_ext
+        URL "https://github.com/ShiftMediaProject/gmp/releases/download/6.2.1/libgmp_6.2.1_msvc14.zip"
+        PREFIX "${CMAKE_BINARY_DIR}/gmp"
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/include ${CLEAN_WHEEL_PREFIX}/include
+                COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/lib/x64 ${CLEAN_WHEEL_PREFIX}/lib
+    )
+    set(GMP_INC_DIR "${CLEAN_WHEEL_PREFIX}/include")
+    set(GMP_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/gmp.lib")
+    set(GMPXX_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/gmp.lib") 
+else()
+    ExternalProject_Add(gmp_ext
+        URL "https://github.com/ShiftMediaProject/gmp/archive/refs/tags/6.2.1.tar.gz"
+        PREFIX "${CMAKE_BINARY_DIR}/gmp"
+        CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=${CLEAN_WHEEL_PREFIX} --enable-cxx --disable-shared --enable-static --with-pic
+        BUILD_COMMAND $(MAKE)
+        INSTALL_COMMAND $(MAKE) install
+    )
+    set(GMP_INC_DIR "${CLEAN_WHEEL_PREFIX}/include")
+    set(GMP_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/libgmp.a")
+    set(GMPXX_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/libgmpxx.a")
+endif()
+
+# ==============================================================================
+# COMPILER FLAGS CONFIGURATION
+# ==============================================================================
+if(WIN32)
+    # Explicitly append our true Python include dir directly into compiler flags as a permanent fallback
+    set(GR_CXX_FLAGS "/EHsc /GR /DBOOST_ALL_NO_LIB /I\"${CLEAN_WHEEL_PREFIX}/include\" /I\"${PYTHON_REAL_INCLUDE_DIR}\"")
+    set(GR_C_FLAGS "/I\"${CLEAN_WHEEL_PREFIX}/include\" /I\"${PYTHON_REAL_INCLUDE_DIR}\"")
+else()
+    set(GR_CXX_FLAGS "-I\"${CLEAN_WHEEL_PREFIX}/include\" -I\"${PYTHON_REAL_INCLUDE_DIR}\"")
+    set(GR_C_FLAGS "-I\"${CLEAN_WHEEL_PREFIX}/include\" -I\"${PYTHON_REAL_INCLUDE_DIR}\"")
+endif()
+
+# ==============================================================================
+# STUB GENERATION HELPER SCRIPT
+# ==============================================================================
+# On Windows, CMake list-splitting breaks semi-colon separated PATHs.
+# We generate a standalone script to safely handle Python paths and DLL injection.
+set(STUBGEN_SCRIPT "${CMAKE_BINARY_DIR}/run_stubgen.py")
+file(WRITE "${STUBGEN_SCRIPT}" "
+import os, sys
+
+# Inject the wheel staging site-packages directory into the path
+staging_path = r'${CLEAN_WHEEL_PREFIX}/${SP_DIR}'
+sys.path.insert(0, staging_path)
+
+# Safe Windows DLL directory resolution (Required for Python 3.8+ on Windows)
+if sys.platform == 'win32':
+    bin_dir = r'${CLEAN_WHEEL_PREFIX}/bin'
+    lib_dir = r'${CLEAN_WHEEL_PREFIX}/lib'
+    if os.path.exists(bin_dir):
+        try:
+            os.add_dll_directory(bin_dir)
+        except AttributeError:
+            pass # Fallback for older Python versions
+    if os.path.exists(lib_dir):
+        try:
+            os.add_dll_directory(lib_dir)
+        except AttributeError:
+            pass
+    # Update environment PATH as a legacy fallback
+    os.environ['PATH'] = bin_dir + os.pathsep + lib_dir + os.pathsep + os.environ.get('PATH', '')
+
+# Execute stub generator programmatically
+try:
+    from pybind11_stubgen import main
+    sys.argv = [
+        'pybind11_stubgen',
+        '--output-dir', staging_path,
+        '--ignore-all-errors',
+        'gnuradio'
+    ]
+    main()
+except Exception as e:
+    print(f'Stubgen failed: {e}', file=sys.stderr)
+    sys.exit(1)
+")
+
+# ==============================================================================
+# MAIN GNU RADIO COMPILATION PHASE
+# ==============================================================================
+set(GR_CMAKE_ARGS
+    "-DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}"
+    "-DCMAKE_PREFIX_PATH=${CLEAN_SYS_PREFIX};${CLEAN_SITE_PACKAGES};${CLEAN_WHEEL_PREFIX}"
+    "-DCMAKE_BUILD_TYPE=Release"
+    -DMPLIB=gmp_fallback
+    "-DCMAKE_CXX_FLAGS=${GR_CXX_FLAGS}"
+    "-DCMAKE_C_FLAGS=${GR_C_FLAGS}"
+    "-DCMAKE_REQUIRED_INCLUDES=${CLEAN_WHEEL_PREFIX}/include;${PYTHON_REAL_INCLUDE_DIR}"
+    "-DCMAKE_RC_FLAGS=/I\"${HACK_INCLUDE_DIR}\""    
+    
+    # SYSTEM COMPONENT SWITCHES
+    -DENABLE_GR_FFT=ON
+    -DENABLE_GR_FILTER=ON
+    -DENABLE_GR_ANALOG=ON
+    -DENABLE_GR_BLOCKS=ON
+    
+    # --- VOLK HARD-INJECTION ---
+    -DENABLE_VOLK=ON
+    "-DVOLK_INCLUDE_DIRS=${CLEAN_WHEEL_PREFIX}/include"
+    "-DVOLK_LIBRARIES=${CLEAN_WHEEL_PREFIX}/lib/volk.lib"
+    "-DVOLK_IMPLEMENTATION_LIST=generic"
+    "-DVOLK_FOUND=TRUE"
+    "-DVolk_FOUND=TRUE"
+    
+    # PYTHON DEPENDENCY RECOVERY (No reference to virtualenv includes/libs anymore!)
+    "-DPython3_INCLUDE_DIR=${PYTHON_REAL_INCLUDE_DIR}"
+    "-DPython3_LIBRARY=${PYTHON_REAL_LIBRARY}"
+    "-Dpybind11_DIR=${CLEAN_PYBIND11_DIR}"
+    -DCMAKE_POLICY_DEFAULT_CMP0148=OLD
+    -DPYTHON_EXECUTABLE=${Python_EXECUTABLE}
+    "-DPYTHON_INCLUDE_DIR=${PYTHON_REAL_INCLUDE_DIR}"
+    "-DPYTHON_INCLUDE_DIRS=${PYTHON_REAL_INCLUDE_DIR}"
+    "-DPYTHON_LIBRARY=${PYTHON_REAL_LIBRARY}"
+    "-DPYTHON_LIBRARIES=${PYTHON_REAL_LIBRARY}"
     -DGR_PYTHON_DIR=${SP_DIR}
     -DENABLE_PYTHON=ON
+    
+    # BOOST OVERRIDES
+    -DBoost_DIR=${CLEAN_WHEEL_PREFIX}/lib/cmake/Boost-1.82.0
+    -DBOOST_ROOT=${CLEAN_WHEEL_PREFIX}
+    -DBoost_INCLUDE_DIR=${CLEAN_WHEEL_PREFIX}/include
+    -DBoost_LIBRARY_DIR=${CLEAN_WHEEL_PREFIX}/lib
+    -DBoost_NO_SYSTEM_PATHS=ON
+    -DCMAKE_POLICY_DEFAULT_CMP0144=NEW
+    -DCMAKE_POLICY_DEFAULT_CMP0167=OLD
+    
+    # RUNTIME AUDIO SETUP
+    -DENABLE_GNURADIO_RUNTIME=ON
     -DENABLE_GR_AUDIO=ON
-    -DENABLE_GR_BLOCKS=ON
-    -DENABLE_GR_ANALOG=ON
-    -DAUDIO_BACKEND=alsa
-    -DHAVE_LIBSNDFILE=TRUE
+    -DAUDIO_BACKEND=${AUDIO_BACKEND}
+    "-DPython_NumPy_INCLUDE_DIR=${CLEAN_NUMPY_INCLUDE_DIR}"
+    -DCMAKE_POLICY_DEFAULT_CMP0127=OLD
+    "-DFFTW3f_INCLUDE_DIRS=${CLEAN_WHEEL_PREFIX}/include"
+    "-DFFTW3f_LIBRARIES=${CLEAN_WHEEL_PREFIX}/lib/fftw3f.lib"
+    "-DSNDFILE_INCLUDE_DIRS=${CLEAN_WHEEL_PREFIX}/include"
+    "-DSNDFILE_LIBRARIES=${CLEAN_WHEEL_PREFIX}/lib/sndfile.lib"
+    "-DCMAKE_PROJECT_gnuradio_INCLUDE_BEFORE=${CMAKE_CURRENT_LIST_DIR}/mpir_bridge.cmake"
+
+    # --- PORTABLE ISOLATED MULTI-PRECISION MATH TARGETS ---
+    -DGMP_INCLUDE_DIR=${GMP_INC_DIR}
+    -DGMP_LIBRARY=${GMP_LIB_PATH}
+    -DGMPXX_LIBRARY=${GMPXX_LIB_PATH}
+    -DMPIR_INCLUDE_DIR=${GMP_INC_DIR}
+    -DMPIR_LIBRARY=${GMP_LIB_PATH}
+    -DMPIRXX_LIBRARY=${GMPXX_LIB_PATH}
+    -DMPLIB_FOUND=TRUE
+    -DMPLIB_LIBRARIES=${GMP_LIB_PATH}
+)
+
+ExternalProject_Add(
+    gnuradio
+    DEPENDS libsndfile_ext volk_ext boost_ext spdlog_ext fftw3f_ext gmp_ext
+    GIT_REPOSITORY https://github.com/gnuradio/gnuradio.git
+    GIT_TAG v3.10.12.0
+    SOURCE_DIR ${CMAKE_BINARY_DIR}/gnuradio-src
+    BINARY_DIR ${CMAKE_BINARY_DIR}/gnuradio-build
+
+    # Patch command works correctly in-place on the checked out git files
+    PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Patching .rc files for winres.h..."
+          COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_BINARY_DIR}/gnuradio-src -P "${CMAKE_CURRENT_LIST_DIR}/patch_rc.cmake"
+    
+    CMAKE_ARGS ${GR_CMAKE_ARGS}
+    
+    BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release
+    INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target install
+    
+    # --- RUN THE GENERATED PORTABLE SCRIPT ---
+    COMMAND ${Python_EXECUTABLE} "${STUBGEN_SCRIPT}"
 )

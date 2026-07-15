@@ -1,0 +1,1 @@
+file(WRITE "${FILE_PATH}" "// MFC Fallback Wrapper\n#include <winres.h>\n")
