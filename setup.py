@@ -22,14 +22,46 @@ for pkg in SUPPORTED_PACKAGES:
 
 class PIPCMakeExecutor(build_ext):
     def run(self):
-        # Establish a hard, static build directory inside the repo root.
-        # This prevents pip from breaking path resolution mid-build.
-        build_temp = os.path.abspath(os.path.join("build", "native_compile"))
+        # ----------------------------------------------------------------------
+        # FIX 1: BYPASS WINDOWS MAX_PATH (260 chars) LIMIT
+        # ----------------------------------------------------------------------
+        # When installing via git, Poetry/Pip clones into a very deep AppData
+        # cache directory. MSBuild silently crashes when paths exceed 260 chars,
+        # which CMake misinterprets as "CXX compiler unknown".
+        if sys.platform == "win32":
+            # Force a short, shallow build path (e.g., C:\Users\<Name>\.gr_build)
+            build_temp = os.path.abspath(
+                os.path.join(os.path.expanduser("~"), ".gr_build")
+            )
+        else:
+            build_temp = os.path.abspath(os.path.join("build", "native_compile"))
+
         os.makedirs(build_temp, exist_ok=True)
+
+        # ----------------------------------------------------------------------
+        # FIX 2: ENSURE GIT SUBMODULES ARE CLONED
+        # ----------------------------------------------------------------------
+        # Pip and Poetry do NOT reliably clone git submodules automatically.
+        # GNU Radio relies heavily on them. We must fetch them manually.
+        if os.path.exists(".git"):
+            print("--- [PIP Automation] Synchronizing Git Submodules ---")
+            try:
+                subprocess.check_call(
+                    ["git", "submodule", "update", "--init", "--recursive"]
+                )
+            except subprocess.CalledProcessError as e:
+                print(
+                    f"Warning: Git submodules failed to update. The build may fail. ({e})"
+                )
 
         # Absolute pathing required specifically for CMake contexts
         abs_wheel_prefix = os.path.abspath(WHEEL_PREFIX)
         env = os.environ.copy()
+
+        # Prevent Poetry/PEP-517 from injecting conflicting C compilers into the environment
+        if sys.platform == "win32":
+            env.pop("CC", None)
+            env.pop("CXX", None)
 
         # ----------------------------------------------------------------------
         # RESOLVE PYTHON PATHS (Uses active environment to match NumPy 2.x)
