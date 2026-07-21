@@ -144,6 +144,8 @@ ExternalProject_Add(
         -DCMAKE_INSTALL_PREFIX=${CLEAN_WHEEL_PREFIX}
         -DENABLE_TESTING=OFF
         -DENABLE_PROFILING=OFF
+        "-DPYTHON_EXECUTABLE=${Python_EXECUTABLE}"
+        "-DPython3_EXECUTABLE=${Python_EXECUTABLE}"
 )
 
 ExternalProject_Add(
@@ -198,10 +200,12 @@ if(WIN32)
         BUILD_COMMAND ""
         INSTALL_COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/include ${CLEAN_WHEEL_PREFIX}/include
                 COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/lib/x64 ${CLEAN_WHEEL_PREFIX}/lib
+                # --- THIS IS THE MISSING LINE ---
+                COMMAND ${CMAKE_COMMAND} -E copy_directory <SOURCE_DIR>/bin/x64 ${CLEAN_WHEEL_PREFIX}/bin
     )
     set(GMP_INC_DIR "${CLEAN_WHEEL_PREFIX}/include")
     set(GMP_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/gmp.lib")
-    set(GMPXX_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/gmp.lib") 
+    set(GMPXX_LIB_PATH "${CLEAN_WHEEL_PREFIX}/lib/gmp.lib")
 else()
     ExternalProject_Add(gmp_ext
         URL "https://github.com/ShiftMediaProject/gmp/archive/refs/tags/6.2.1.tar.gz"
@@ -230,46 +234,64 @@ endif()
 # ==============================================================================
 # STUB GENERATION HELPER SCRIPT
 # ==============================================================================
-# On Windows, CMake list-splitting breaks semi-colon separated PATHs.
-# We generate a standalone script to safely handle Python paths and DLL injection.
 set(STUBGEN_SCRIPT "${CMAKE_BINARY_DIR}/run_stubgen.py")
 file(WRITE "${STUBGEN_SCRIPT}" "
-import os, sys
+import os, sys, subprocess
 
-# Inject the wheel staging site-packages directory into the path
+# Raw paths from CMake
 staging_path = r'${CLEAN_WHEEL_PREFIX}/${SP_DIR}'
-sys.path.insert(0, staging_path)
+bin_dir = r'${CLEAN_WHEEL_PREFIX}/bin'
+lib_dir = r'${CLEAN_WHEEL_PREFIX}/lib'
+gnuradio_dir = r'${CLEAN_WHEEL_PREFIX}/${SP_DIR}/gnuradio'
 
-# Safe Windows DLL directory resolution (Required for Python 3.8+ on Windows)
-if sys.platform == 'win32':
-    bin_dir = r'${CLEAN_WHEEL_PREFIX}/bin'
-    lib_dir = r'${CLEAN_WHEEL_PREFIX}/lib'
-    if os.path.exists(bin_dir):
-        try:
-            os.add_dll_directory(bin_dir)
-        except AttributeError:
-            pass # Fallback for older Python versions
-    if os.path.exists(lib_dir):
-        try:
-            os.add_dll_directory(lib_dir)
-        except AttributeError:
-            pass
-    # Update environment PATH as a legacy fallback
-    os.environ['PATH'] = bin_dir + os.pathsep + lib_dir + os.pathsep + os.environ.get('PATH', '')
+# CRITICAL FIX: Convert CMake forward slashes (/) to Windows backslashes (\)
+staging_path = os.path.abspath(os.path.normpath(staging_path))
+bin_dir = os.path.abspath(os.path.normpath(bin_dir))
+lib_dir = os.path.abspath(os.path.normpath(lib_dir))
+gnuradio_dir = os.path.abspath(os.path.normpath(gnuradio_dir))
 
-# Execute stub generator programmatically
-try:
-    from pybind11_stubgen import main
-    sys.argv = [
-        'pybind11_stubgen',
-        '--output-dir', staging_path,
-        '--ignore-all-errors',
-        'gnuradio'
+print('--- [Stubgen Lifecycle] Staging path: ' + staging_path + ' ---')
+
+targets = []
+if os.path.exists(os.path.join(staging_path, 'pmt')):
+    targets.append('pmt')
+
+if os.path.exists(gnuradio_dir):
+    targets.append('gnuradio')
+    for item in os.listdir(gnuradio_dir):
+        item_path = os.path.join(gnuradio_dir, item)
+        if os.path.isdir(item_path) and not item.startswith('__'):
+            targets.append('gnuradio.' + item)
+
+for target in targets:
+    print('Executing stub generation for: ' + target)
+    
+    # Safely construct the runner script without f-string escaping collisions
+    lines = [
+        'import os, sys',
+        'sys.path.insert(0, ' + repr(staging_path) + ')',
+        'if sys.platform == \"win32\":',
+        '    for d in [' + repr(bin_dir) + ', ' + repr(lib_dir) + ', ' + repr(gnuradio_dir) + ']:',
+        '        if os.path.isdir(d):',
+        '            try:',
+        '                os.add_dll_directory(d)',
+        '            except Exception as e:',
+        '                print(\"WARNING: os.add_dll_directory failed for \" + d + \" -> \" + str(e))',
+        '    # Fallback for older legacy DLL loaders',
+        '    os.environ[\"PATH\"] = ' + repr(bin_dir) + ' + os.pathsep + ' + repr(lib_dir) + ' + os.pathsep + os.environ.get(\"PATH\", \"\")',
+        'from pybind11_stubgen import main',
+        'sys.argv = [\"pybind11_stubgen\", \"--output-dir\", ' + repr(staging_path) + ', ' + repr(target) + ']',
+        'main()'
     ]
-    main()
-except Exception as e:
-    print(f'Stubgen failed: {e}', file=sys.stderr)
-    sys.exit(1)
+    
+    runner_code = chr(10).join(lines)
+    
+    res = subprocess.run([sys.executable, '-c', runner_code], capture_output=True, text=True)
+    if res.returncode != 0:
+        print('STUBGEN ERROR for ' + target + ':')
+        print(res.stderr)
+    else:
+        print('Successfully generated .pyi for ' + target)
 ")
 
 # ==============================================================================

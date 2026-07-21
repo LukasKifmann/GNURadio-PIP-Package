@@ -1,10 +1,11 @@
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import sysconfig
 
-from setuptools import Extension, setup
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 # Use strictly relative paths for setuptools mapping
@@ -23,15 +24,17 @@ for pkg in SUPPORTED_PACKAGES:
 class PIPCMakeExecutor(build_ext):
     def run(self):
         # ----------------------------------------------------------------------
-        # FIX 1: BYPASS WINDOWS MAX_PATH (260 chars) LIMIT
+        # FIX 1: BYPASS WINDOWS MAX_PATH (260 chars) LIMIT & CACHE COLLISIONS
         # ----------------------------------------------------------------------
-        # When installing via git, Poetry/Pip clones into a very deep AppData
-        # cache directory. MSBuild silently crashes when paths exceed 260 chars,
-        # which CMake misinterprets as "CXX compiler unknown".
         if sys.platform == "win32":
-            # Force a short, shallow build path (e.g., C:\Users\<Name>\.gr_build)
+            # Hash the current source directory to prevent CMakeCache collisions
+            # between local dev builds and git-based isolated builds.
+            src_path = os.path.abspath(".")
+            path_hash = hashlib.md5(src_path.encode("utf-8")).hexdigest()[:6]
+
+            # Force a short, shallow build path (e.g., C:\Users\<Name>\.gr_build_a1b2c3)
             build_temp = os.path.abspath(
-                os.path.join(os.path.expanduser("~"), ".gr_build")
+                os.path.join(os.path.expanduser("~"), f".gr_build_{path_hash}")
             )
         else:
             build_temp = os.path.abspath(os.path.join("build", "native_compile"))
@@ -145,31 +148,27 @@ class PIPCMakeExecutor(build_ext):
 
         search_root = os.path.abspath(WHEEL_PREFIX)
 
-        # 1. Dynamically locate all actual compiled python packages in the build tree
+        # 1. Dynamically locate the ROOT compiled python packages in the build tree
         discovered_packages = {}
         for root, dirs, files in os.walk(search_root):
-            rel_to_search_root = os.path.relpath(root, search_root)
-            path_parts = rel_to_search_root.split(os.sep)
-
-            # Prevent scanning our placeholder root wrappers
-            if path_parts[0] in SUPPORTED_PACKAGES or path_parts[0] == ".":
-                continue
-
-            for d in dirs:
-                candidate = os.path.abspath(os.path.join(root, d))
-                init_file = os.path.join(candidate, "__init__.py")
-                if os.path.exists(init_file):
-                    with open(init_file, "r") as f:
-                        content = f.read()
-                    # Ensure it's not our placeholder staging wrapper
-                    if "# Staging wrapper" not in content:
-                        discovered_packages[d] = candidate
+            for target_pkg in SUPPORTED_PACKAGES:
+                if target_pkg in dirs:
+                    candidate = os.path.abspath(os.path.join(root, target_pkg))
+                    init_file = os.path.join(candidate, "__init__.py")
+                    # Ensure it exists and we haven't already mapped it
+                    if (
+                        os.path.exists(init_file)
+                        and target_pkg not in discovered_packages
+                    ):
+                        with open(init_file, "r") as f:
+                            # Ensure it's not our placeholder staging wrapper
+                            if "# Staging wrapper" not in f.read():
+                                discovered_packages[target_pkg] = candidate
 
         if not discovered_packages:
-            raise RuntimeError(
-                f"Could not find any compiled Python packages inside '{search_root}'. "
-                "Make sure the CMake build and installation steps completed successfully."
-            )
+            raise RuntimeError("Could not find compiled Python packages!")
+
+        print(f"Discovered root packages: {list(discovered_packages.keys())}")
 
         print(f"Discovered compiled packages: {list(discovered_packages.keys())}")
 
@@ -296,8 +295,14 @@ class PIPCMakeExecutor(build_ext):
 setup(
     name="gnuradio",
     version="3.10.12.0",
-    packages=SUPPORTED_PACKAGES,
+    # --- LET SETUPTOOLS FIND ALL NESTED SUBPACKAGES AUTOMATICALLY ---
+    packages=find_packages(where=WHEEL_PREFIX),
+    # ---------------------------------------------------------------
     package_dir={"": WHEEL_PREFIX},
+    package_data={
+        "": ["*.pyi", "**/*.pyi", "*.dll", "*.so", "*.dylib", "*.pyd"],
+    },
+    include_package_data=False,
     ext_modules=[Extension("gnuradio._native", sources=[])],
     cmdclass={"build_ext": PIPCMakeExecutor},
     zip_safe=False,
