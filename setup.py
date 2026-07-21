@@ -291,6 +291,23 @@ class PIPCMakeExecutor(build_ext):
             "Successfully synchronized compiled modules, typings, and companion libraries!"
         )
 
+        # 6. Purge __pycache__ directories to prevent wheel security warnings
+        print("--- [PIP Automation] Scrubbing __pycache__ directories ---")
+
+        # We check both the CMake staging prefix and the setuptools build_lib
+        for target_dir in [WHEEL_PREFIX, self.build_lib]:
+            if not os.path.exists(target_dir):
+                continue
+
+            # topdown=False is required when deleting directories during os.walk
+            for root, dirs, files in os.walk(target_dir, topdown=False):
+                for d in dirs:
+                    if d == "__pycache__":
+                        pycache_path = os.path.join(root, d)
+                        print(f"Removing bytecode cache: {pycache_path}")
+
+                        shutil.rmtree(pycache_path)
+
 
 setup(
     name="gnuradio",
