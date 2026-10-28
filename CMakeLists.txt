@@ -25,6 +25,13 @@ if (NOT WIN32)
         OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
+
+    execute_process(
+        COMMAND ${PYTHON_EXECUTABLE}
+                -c "import pybind11; print(pybind11.get_cmake_dir())"
+        OUTPUT_VARIABLE PYBIND11_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
                     
     ExternalProject_Add(
         gnuradio
@@ -34,6 +41,7 @@ if (NOT WIN32)
         BINARY_DIR ${CMAKE_BINARY_DIR}/gnuradio-build
         INSTALL_DIR ${CMAKE_INSTALL_PREFIX}
         CMAKE_ARGS
+            -Dpybind11_DIR=${PYBIND11_DIR}
             -DCMAKE_PREFIX_PATH=<INSTALL_DIR>
             -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
             -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
