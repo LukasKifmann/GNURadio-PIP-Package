@@ -9,8 +9,8 @@ if (NOT WIN32)
     include_directories(${SNDFILE_INCLUDE_DIRS})
     link_directories(${SNDFILE_LIBRARY_DIRS})
     
-    execute_process(COMMAND python3 -c "import sys; print(sys.executable)"
-                    OUTPUT_VARIABLE PYTHON_EXECUTABLE OUTPUT_STRIP_TRAILING_WHITESPACE)
+    find_package(Python REQUIRED COMPONENTS Interpreter)
+    set(PYTHON_EXECUTABLE "${Python_EXECUTABLE}")
     
     execute_process(
         COMMAND ${PYTHON_EXECUTABLE}
