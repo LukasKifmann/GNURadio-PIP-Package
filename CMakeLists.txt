@@ -14,13 +14,6 @@ if (NOT WIN32)
     
     execute_process(
         COMMAND ${PYTHON_EXECUTABLE}
-                -c "import sysconfig; print(sysconfig.get_path('platlib'))"
-        OUTPUT_VARIABLE SP_DIR
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    
-    execute_process(
-        COMMAND ${PYTHON_EXECUTABLE}
                 -c "import numpy; print(numpy.get_include())"
         OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -45,8 +38,7 @@ if (NOT WIN32)
             -DCMAKE_PREFIX_PATH=<INSTALL_DIR>
             -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
             -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
-            -DPYTHON_SITE_PACKAGES=${SP_DIR}
-            -DGR_PYTHON_DIR=${SP_DIR}
+            -DPYTHON_SITE_PACKAGES=<INSTALL_DIR>
             -DPython_NumPy_INCLUDE_DIR=${NUMPY_INCLUDE_DIR}
             -DENABLE_PYTHON=ON
             -DENABLE_GR_AUDIO=ON
