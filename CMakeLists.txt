@@ -158,9 +158,7 @@ else()
     message(STATUS "Using Base Python Include: ${PYTHON_REAL_INCLUDE_DIR}")
     message(STATUS "Using Base Python Library: ${PYTHON_REAL_LIBRARY}")
     
-    if(WIN32)
-        set(ENV{INCLUDE} "$ENV{INCLUDE};${CLEAN_WHEEL_PREFIX}/include")
-    endif()
+    set(ENV{INCLUDE} "$ENV{INCLUDE};${CLEAN_WHEEL_PREFIX}/include")
     
     # ==============================================================================
     # HACK: Force-generate missing afxres.h header for rc.exe
