@@ -18,6 +18,13 @@ if (NOT WIN32)
         OUTPUT_VARIABLE SP_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
+
+    execute_process(
+        COMMAND ${PYTHON_EXECUTABLE}
+                -c "import pybind11; print(pybind11.get_cmake_dir())"
+        OUTPUT_VARIABLE PYBIND11_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
                     
     ExternalProject_Add(
         gnuradio
@@ -34,6 +41,7 @@ if (NOT WIN32)
             -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
             -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
             -DPYTHON_SITE_PACKAGES=${SP_DIR}
+            -DGR_PYTHON_DIR=${SP_DIR}
             -DENABLE_PYTHON=ON
             -DENABLE_GR_AUDIO=ON
             -DENABLE_GR_BLOCKS=ON
@@ -42,6 +50,7 @@ if (NOT WIN32)
             -DENABLE_GR_FFT=ON
             -DAUDIO_BACKEND=alsa
             -DHAVE_LIBSNDFILE=TRUE
+            -Dpybind11_DIR=${PYBIND11_DIR}
     )
 else()
     # ==============================================================================
