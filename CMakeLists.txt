@@ -11,18 +11,11 @@ if (NOT WIN32)
     
     find_package(Python REQUIRED COMPONENTS Interpreter)
     set(PYTHON_EXECUTABLE "${Python_EXECUTABLE}")
-    
-    execute_process(
-        COMMAND ${PYTHON_EXECUTABLE}
-                -c "import numpy; print(numpy.get_include())"
-        OUTPUT_VARIABLE NUMPY_INCLUDE_DIR
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
 
     execute_process(
         COMMAND ${PYTHON_EXECUTABLE}
-                -c "import pybind11; print(pybind11.get_cmake_dir())"
-        OUTPUT_VARIABLE PYBIND11_DIR
+                -c "import sysconfig; print(sysconfig.get_path('platlib'))"
+        OUTPUT_VARIABLE SP_DIR
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
                     
@@ -34,12 +27,13 @@ if (NOT WIN32)
         BINARY_DIR ${CMAKE_BINARY_DIR}/gnuradio-build
         INSTALL_DIR ${CMAKE_INSTALL_PREFIX}
         CMAKE_ARGS
-            -Dpybind11_DIR=${PYBIND11_DIR}
             -DCMAKE_PREFIX_PATH=<INSTALL_DIR>
             -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+            -DCMAKE_INSTALL_RPATH=${SP_DIR}/lib
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
+            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
             -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
-            -DPYTHON_SITE_PACKAGES=<INSTALL_DIR>
-            -DPython_NumPy_INCLUDE_DIR=${NUMPY_INCLUDE_DIR}
+            -DPYTHON_SITE_PACKAGES=${SP_DIR}
             -DENABLE_PYTHON=ON
             -DENABLE_GR_AUDIO=ON
             -DENABLE_GR_BLOCKS=ON
@@ -48,7 +42,6 @@ if (NOT WIN32)
             -DENABLE_GR_FFT=ON
             -DAUDIO_BACKEND=alsa
             -DHAVE_LIBSNDFILE=TRUE
-            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
     )
 else()
     # ==============================================================================
