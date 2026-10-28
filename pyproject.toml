@@ -15,5 +15,5 @@ dependencies = [
 ]
 
 [tool.scikit-build]
-cmake.verbose = true
+build.verbose = true
 cmake.version = ">=3.24"
