@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 project(gnuradio-pip-package)
 
 include(ExternalProject)
+
 if (NOT WIN32)
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(SNDFILE REQUIRED sndfile)
@@ -36,21 +37,26 @@ if (NOT WIN32)
         CMAKE_ARGS
             -DCMAKE_PREFIX_PATH=<INSTALL_DIR>
             -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-            -DCMAKE_INSTALL_RPATH=${SP_DIR}/lib
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
-            -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
             -DPYTHON_EXECUTABLE=${PYTHON_EXECUTABLE}
             -DPYTHON_SITE_PACKAGES=<INSTALL_DIR>
             -DGR_PYTHON_DIR=<INSTALL_DIR>
+            -DCMAKE_INSTALL_RPATH=\$ORIGIN/../../lib
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=TRUE
             -DENABLE_PYTHON=ON
             -DENABLE_GR_AUDIO=ON
             -DENABLE_GR_BLOCKS=ON
             -DENABLE_GR_ANALOG=ON
             -DENABLE_GR_FILTER=ON
             -DENABLE_GR_FFT=ON
-            -DAUDIO_BACKEND=alsa
-            -DHAVE_LIBSNDFILE=TRUE
+            -DENABLE_GR_ZEROMQ=OFF
+            -DENABLE_GR_QTGUI=OFF
+            -DENABLE_GR_UHD=OFF
+            -DENABLE_GR_SOAPY=OFF
             -Dpybind11_DIR=${PYBIND11_DIR}
+
+        INSTALL_COMMAND
+            ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
+            COMMAND ${PYTHON_EXECUTABLE} "${CMAKE_CURRENT_LIST_DIR}/run_stubgen.py" <INSTALL_DIR>
     )
 else()
     # ==============================================================================
@@ -247,69 +253,6 @@ else()
     set(GR_C_FLAGS "/I\"${CLEAN_WHEEL_PREFIX}/include\" /I\"${PYTHON_REAL_INCLUDE_DIR}\"")
     
     # ==============================================================================
-    # STUB GENERATION HELPER SCRIPT
-    # ==============================================================================
-    set(STUBGEN_SCRIPT "${CMAKE_BINARY_DIR}/run_stubgen.py")
-    file(WRITE "${STUBGEN_SCRIPT}" "
-    import os, sys, subprocess
-    
-    # Raw paths from CMake
-    staging_path = r'${CLEAN_WHEEL_PREFIX}/${SP_DIR}'
-    bin_dir = r'${CLEAN_WHEEL_PREFIX}/bin'
-    lib_dir = r'${CLEAN_WHEEL_PREFIX}/lib'
-    gnuradio_dir = r'${CLEAN_WHEEL_PREFIX}/${SP_DIR}/gnuradio'
-    
-    # CRITICAL FIX: Convert CMake forward slashes (/) to Windows backslashes (\)
-    staging_path = os.path.abspath(os.path.normpath(staging_path))
-    bin_dir = os.path.abspath(os.path.normpath(bin_dir))
-    lib_dir = os.path.abspath(os.path.normpath(lib_dir))
-    gnuradio_dir = os.path.abspath(os.path.normpath(gnuradio_dir))
-    
-    print('--- [Stubgen Lifecycle] Staging path: ' + staging_path + ' ---')
-    
-    targets = []
-    if os.path.exists(os.path.join(staging_path, 'pmt')):
-        targets.append('pmt')
-    
-    if os.path.exists(gnuradio_dir):
-        targets.append('gnuradio')
-        for item in os.listdir(gnuradio_dir):
-            item_path = os.path.join(gnuradio_dir, item)
-            if os.path.isdir(item_path) and not item.startswith('__'):
-                targets.append('gnuradio.' + item)
-    
-    for target in targets:
-        print('Executing stub generation for: ' + target)
-        
-        # Safely construct the runner script without f-string escaping collisions
-        lines = [
-            'import os, sys',
-            'sys.path.insert(0, ' + repr(staging_path) + ')',
-            'if sys.platform == \"win32\":',
-            '    for d in [' + repr(bin_dir) + ', ' + repr(lib_dir) + ', ' + repr(gnuradio_dir) + ']:',
-            '        if os.path.isdir(d):',
-            '            try:',
-            '                os.add_dll_directory(d)',
-            '            except Exception as e:',
-            '                print(\"WARNING: os.add_dll_directory failed for \" + d + \" -> \" + str(e))',
-            '    # Fallback for older legacy DLL loaders',
-            '    os.environ[\"PATH\"] = ' + repr(bin_dir) + ' + os.pathsep + ' + repr(lib_dir) + ' + os.pathsep + os.environ.get(\"PATH\", \"\")',
-            'from pybind11_stubgen import main',
-            'sys.argv = [\"pybind11_stubgen\", \"--output-dir\", ' + repr(staging_path) + ', ' + repr(target) + ']',
-            'main()'
-        ]
-        
-        runner_code = chr(10).join(lines)
-        
-        res = subprocess.run([sys.executable, '-c', runner_code], capture_output=True, text=True)
-        if res.returncode != 0:
-            print('STUBGEN ERROR for ' + target + ':')
-            print(res.stderr)
-        else:
-            print('Successfully generated .pyi for ' + target)
-    ")
-    
-    # ==============================================================================
     # MAIN GNU RADIO COMPILATION PHASE
     # ==============================================================================
     set(GR_CMAKE_ARGS
@@ -394,11 +337,9 @@ else()
               COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_BINARY_DIR}/gnuradio-src -P "${CMAKE_CURRENT_LIST_DIR}/patch_rc.cmake"
         
         CMAKE_ARGS ${GR_CMAKE_ARGS}
-        
-        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release
-        INSTALL_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config Release --target install
-        
-        # --- RUN THE GENERATED PORTABLE SCRIPT ---
-        COMMAND ${Python_EXECUTABLE} "${STUBGEN_SCRIPT}"
+
+        INSTALL_COMMAND
+            ${CMAKE_COMMAND} --build <BINARY_DIR> --target install
+            COMMAND ${PYTHON_EXECUTABLE} "${CMAKE_CURRENT_LIST_DIR}/run_stubgen.py" <INSTALL_DIR>
     )
 endif()
