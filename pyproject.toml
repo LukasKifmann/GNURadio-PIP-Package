@@ -5,6 +5,7 @@ requires = [
     "pybind11",
     "pybind11-stubgen",
     "packaging",
+    "typing_extensions"
 ]
 build-backend = "scikit_build_core.build"
 
